@@ -151,7 +151,7 @@ Friend Module ModSecret
     Friend Sub UpdateCheckByButton()
         Dim FetchTask As New LoaderTask(Of String, JObject)("获取最新版本信息",
         Sub(Task As LoaderTask(Of String, JObject))
-            Dim JsonStr = NetRequestByClient("https://api.github.com/repos/4444ji/PCL/releases/latest", 
+            Dim JsonStr = NetRequestByClient("https://api.github.com/repos/4444ji/PCL_Aris/releases/latest", 
                                               SimulateBrowserHeaders:=True, Timeout:=10000)
             Task.Output = JsonStr.DeserializeJson()
         End Sub)
@@ -264,7 +264,7 @@ Friend Module ModSecret
     Public ServerLoader As New LoaderTask(Of Integer, Integer)("PCL 配置更新", 
     Sub()
         Try
-            Dim JsonStr = NetRequestByClient("https://api.github.com/repos/4444ji/PCL/releases/latest", 
+            Dim JsonStr = NetRequestByClient("https://api.github.com/repos/4444ji/PCL_Aris/releases/latest", 
                                               SimulateBrowserHeaders:=True, Timeout:=8000)
             Dim Json = JsonStr.DeserializeJson()
             Dim LatestVersion = Json("tag_name")?.ToString()
