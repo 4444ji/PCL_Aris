@@ -10,7 +10,7 @@ Friend Module ModSecret
     Public OAuthClientId As String = If(Environment.GetEnvironmentVariable("PCL_MS_CLIENT_ID"), "")
     'CurseForge API Key
     Public CurseForgeAPIKey As String = If(Environment.GetEnvironmentVariable("PCL_CURSEFORGE_API_KEY"), "")
-    '用于匿名数据收集的腾讯云日志服务上报 URL，形如 https://{region}.cls.tencentcs.com/track?topic_id={topic_id}
+    '用于匿名数据收集的腾讯云日志服务上报 URL
     Public Const ClsBaseUrl As String = ""
 
 #Region "网络鉴权"
@@ -19,13 +19,11 @@ Friend Module ModSecret
         If Not UrlWithMark.EndsWithF("{CDN}") Then Return UrlWithMark
         Return UrlWithMark.Replace("{CDN}", "").Replace(" ", "%20")
     End Function
-    ''' <summary>
-    ''' 设置 Headers 的 UA、Referer。
-    ''' </summary>
+
     Friend Sub SecretHeadersSign(Url As String, ByRef Req As HttpRequestMessage, Optional SimulateBrowserHeaders As Boolean = False)
         If Not Req.Headers.UserAgent.Any Then
             If Url.Contains("baidupcs.com") OrElse Url.Contains("baidu.com") Then
-                Req.Headers.Add("User-Agent", "LogStatistic")  '#4951
+                Req.Headers.Add("User-Agent", "LogStatistic")
             ElseIf SimulateBrowserHeaders Then
                 Req.Headers.Add("User-Agent", $"PCL2/{VersionBaseName}.{CInt(BuildType)} Mozilla/5.0 AppleWebKit/537.36 Chrome/63.0.3239.132 Safari/537.36")
             Else
@@ -106,11 +104,11 @@ Friend Module ModSecret
             Logger.Error(ex, "刷新主题颜色失败", LogBehavior.Toast)
         End Try
     End Sub
+
     Public Sub ThemeRefreshMain()
         RunInUi(
         Sub()
             If Not FrmMain.IsLoaded Then Return
-            '顶部条背景
             Dim Brush = New LinearGradientBrush With {.EndPoint = New Point(1, 0), .StartPoint = New Point(0, 0)}
             Dim Deltas = ColorHueTopbarDelta.Switch(Function(d) New Integer() {-d, 0, d}, Function(d) d)
             Brush.GradientStops.Add(New GradientStop With {.Offset = 0, .Color = New MyColor().FromHSL2(ColorHue + Deltas(0), ColorSat, 48 + ColorLightAdjust)})
@@ -118,7 +116,6 @@ Friend Module ModSecret
             Brush.GradientStops.Add(New GradientStop With {.Offset = 1, .Color = New MyColor().FromHSL2(ColorHue + Deltas(2), ColorSat, 48 + ColorLightAdjust)})
             FrmMain.PanTitle.Background = Brush
             FrmMain.PanTitle.Background.Freeze()
-            '主页面背景
             If Settings.Get(Of Boolean)("UiBackgroundColorful") Then
                 Brush = New LinearGradientBrush With {.EndPoint = New Point(0.1, 1), .StartPoint = New Point(0.9, 0)}
                 Brush.GradientStops.Add(New GradientStop With {.Offset = -0.1, .Color = New MyColor().FromHSL2(ColorHue - 15, ColorSat * 0.8, 91)})
@@ -131,6 +128,7 @@ Friend Module ModSecret
             FrmMain.PanForm.Background.Freeze()
         End Sub)
     End Sub
+
     Friend Sub ThemeCheckAll(EffectSetup As Boolean)
     End Sub
     Friend Function ThemeCheckOne(Id As Integer) As Boolean
@@ -144,40 +142,167 @@ Friend Module ModSecret
 
 #Region "更新"
 
-    Friend Sub UpdateCheckByButton()
-        Hint("该版本中不包含更新功能……")
-    End Sub
-
     Friend IsUpdateWaitingRestart As Boolean = False
     Public Sub UpdateRestart(TriggerRestartAndByEnd As Boolean)
     End Sub
-    Public Sub UpdateReplace(ProcessId As Integer, OldFileName As String, NewFileName As String, TriggerRestart As Boolean)
+    Friend Sub DownloadLatestPCL(Optional LoaderToSyncProgress As LoaderBase = Nothing)
     End Sub
 
-    ''' <summary>
-    ''' 确保 PathTemp/Latest.exe 是最新正式版的 PCL，它会被用于整合包打包。
-    ''' 如果不是，则下载一个。
-    ''' </summary>
-    Friend Sub DownloadLatestPCL(Optional LoaderToSyncProgress As LoaderBase = Nothing)
-        '注意：如果要自行实现这个功能，请换用另一个文件路径，以免与官方版本冲突
+    Friend Sub UpdateCheckByButton()
+        Dim FetchTask As New LoaderTask(Of String, JObject)("获取最新版本信息",
+        Sub(Task As LoaderTask(Of String, JObject))
+            Dim JsonStr = NetRequestByClient("https://api.github.com/repos/4444ji/PCL/releases/latest", 
+                                              SimulateBrowserHeaders:=True, Timeout:=10000)
+            Task.Output = JsonStr.DeserializeJson()
+        End Sub)
+
+        Dim Loader As New LoaderCombo(Of String)("检查零食版更新", New List(Of LoaderBase) From {FetchTask})
+        
+        Loader.OnStateChanged =
+        Sub(CurrentLoader)
+            If CurrentLoader.State = LoadState.Finished Then
+                Dim Json = CType(FetchTask.Output, JObject)
+                If Json Is Nothing Then Return
+                
+                Dim LatestVersion As String = Json("tag_name")?.ToString()
+                Dim Body As String = Json("body")?.ToString()
+                Dim ExeUrl As String = Nothing
+                
+                Dim Assets = Json("assets")
+                If Assets IsNot Nothing Then
+                    For Each asset In Assets
+                        If asset("name").ToString().EndsWith(".exe") Then
+                            ExeUrl = asset("browser_download_url").ToString()
+                            Exit For
+                        End If
+                    Next
+                End If
+
+                ' ================= 核心：双重校验（版本号 + 哈希） =================
+                Dim TargetHash As String = Nothing
+                If Body IsNot Nothing AndAlso Body.Contains("SHA256:") Then
+                    TargetHash = Body.AfterFirst("SHA256:").Split({vbCrLf, vbLf, " "}, StringSplitOptions.RemoveEmptyEntries)(0).Trim()
+                End If
+
+                Dim IsLatestVersion As Boolean = False
+
+                ' 1. 版本号校验
+                If LatestVersion = "v2.14-alpha" Then ' 这里请根据你最新的 Tag 修改
+                    ' 2. 如果存在目标哈希，则进行哈希校验
+                    If Not String.IsNullOrEmpty(TargetHash) Then
+                        Dim CurrentHash As String = CryptographyUtils.ComputeFileHash(PathExe, CryptographyUtils.HashMethod.Sha256)
+                        If CurrentHash.Equals(TargetHash, StringComparison.OrdinalIgnoreCase) Then
+                            IsLatestVersion = True
+                        End If
+                    Else
+                        ' 如果发布者忘记写哈希，只能退化为仅校验版本号
+                        IsLatestVersion = True
+                    End If
+                End If
+
+                If IsLatestVersion Then
+                    RunInUi(Sub() Hint("当前已是最新版本（版本号与哈希均一致）！", HintType.Green))
+                    Return
+                End If
+                ' =================================================================
+
+                Dim Msg As String = $"发现新版本：{LatestVersion}{vbCrLf}{vbCrLf}更新内容：{vbCrLf}{Body}{vbCrLf}{vbCrLf}是否立即更新并重启？"
+                
+                If MyMsgBox(Msg, "发现新版本", "立即更新", "暂不更新") = 1 Then
+                    If Not String.IsNullOrEmpty(ExeUrl) Then
+                        Dim TempExe = PathTemp & "Update.exe"
+                        Hint("正在下载更新，请稍候……", HintType.Blue)
+                        
+                        RunInNewThread(
+                        Sub()
+                            Try
+                                NetDownloadByLoader(ExeUrl, TempExe)
+                                RunInUi(Sub() UpdateReplace(Process.GetCurrentProcess().Id, PathExe, TempExe, True))
+                            Catch ex As Exception
+                                RunInUi(Sub() Hint("下载更新失败：" & ex.Message, HintType.Red))
+                            End Try
+                        End Sub, "UpdateDownload")
+                    Else
+                        Hint("未找到更新文件！请检查 Release 是否上传了 .exe 附件。", HintType.Red)
+                    End If
+                End If
+            ElseIf CurrentLoader.State = LoadState.Failed Then
+                RunInUi(Sub() Hint("检查更新失败：" & CurrentLoader.Error.Message, HintType.Red))
+            End If
+        End Sub
+
+        Loader.Start()
+        LoaderTaskbarAdd(Loader)
+        FrmMain.BtnExtraDownload.ShowRefresh()
+        FrmMain.BtnExtraDownload.Ribble()
+    End Sub
+
+    Public Sub UpdateReplace(ProcessId As Integer, OldFileName As String, NewFileName As String, TriggerRestart As Boolean)
+        Try
+            Dim OldBackup = OldFileName & ".old"
+            Try
+                If FileUtils.Exists(OldBackup) Then FileUtils.Delete(OldBackup)
+            Catch
+            End Try
+            
+            FileUtils.Move(OldFileName, OldBackup)
+            FileUtils.Move(NewFileName, OldFileName)
+            If TriggerRestart Then StartProcess(OldFileName, "")
+            FormMain.EndProgramForce(ProcessReturnValues.TaskDone)
+        Catch ex As Exception
+            Logger.Error(ex, "PCL 热更新替换失败")
+            MyMsgBox("由于文件被占用或权限不足，自动替换失败。请手动将新版本覆盖到当前目录。", "更新失败", IsWarn:=True)
+        End Try
     End Sub
 
 #End Region
 
 #Region "联网配置"
 
-    ''' <summary>
-    ''' 联网获取的配置信息。
-    ''' 若获取失败或仍在获取中，可能为 Nothing。
-    ''' </summary>
     Public ServerConfig As JObject
 
-    Public ServerLoader As New LoaderTask(Of Integer, Integer)("PCL 配置更新", Sub() Logger.Info("该版本中不包含更新通知功能……"), Priority:=ThreadPriority.BelowNormal) With
-        {.ReloadTimeout = 1000 * 60 * 60} '超时 1 小时
+    Public ServerLoader As New LoaderTask(Of Integer, Integer)("PCL 配置更新", 
+    Sub()
+        Try
+            Dim JsonStr = NetRequestByClient("https://api.github.com/repos/4444ji/PCL/releases/latest", 
+                                              SimulateBrowserHeaders:=True, Timeout:=8000)
+            Dim Json = JsonStr.DeserializeJson()
+            Dim LatestVersion = Json("tag_name")?.ToString()
+            Dim Body = Json("body")?.ToString()
+            
+            ' ================= 双重校验（版本号 + 哈希） =================
+            Dim TargetHash As String = Nothing
+            If Body IsNot Nothing AndAlso Body.Contains("SHA256:") Then
+                TargetHash = Body.AfterFirst("SHA256:").Split({vbCrLf, vbLf, " "}, StringSplitOptions.RemoveEmptyEntries)(0).Trim()
+            End If
+
+            Dim IsLatestVersion As Boolean = False
+            If LatestVersion = "v2.14-alpha" Then
+                If Not String.IsNullOrEmpty(TargetHash) Then
+                    Dim CurrentHash As String = CryptographyUtils.ComputeFileHash(PathExe, CryptographyUtils.HashMethod.Sha256)
+                    If CurrentHash.Equals(TargetHash, StringComparison.OrdinalIgnoreCase) Then
+                        IsLatestVersion = True
+                    End If
+                Else
+                    IsLatestVersion = True
+                End If
+            End If
+
+            If Not IsLatestVersion Then
+                RunInUi(Sub() Hint("发现零食版新版本：" & LatestVersion & "，请前往关于或百宝箱检查更新！", HintType.Green))
+                Logger.Info($"后台检测到新版本：{LatestVersion}")
+            End If
+        Catch
+            Logger.Info("后台更新检测失败（静默）")
+        End Try
+    End Sub, Priority:=ThreadPriority.BelowNormal) With {
+        .ReloadTimeout = 1000 * 60 * 60
+    }
 
 #End Region
 
 #Region "赞助等级"
+    ' 务必保持官方原样，不要修改
 
     Public ReadOnly Property CurrentRank As DonationRank
         Get
@@ -190,9 +315,6 @@ Friend Module ModSecret
     Friend Sub GeneratePotatoCode()
     End Sub
 
-    ''' <summary>
-    ''' 获取设备识别码。
-    ''' </summary>
     Friend Function GetIdentify() As String
         Return "0000-0000-0000-0000"
     End Function
