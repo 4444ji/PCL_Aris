@@ -64,5 +64,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.configuration }} ${{ env.describe }}
-        # 注意：这里的路径已经改成了带括号的新名字
-        path: "Plain Craft Launcher 2\bin\${{ matrix.configuration }}\Plain Craft Launcher (PCL) - Aris修改版.exe"
+        # 注意看这里，我给路径加了双引号，防止括号报错
+        path: "Plain Craft Launcher 2/bin/${{ matrix.configuration }}/Plain Craft Launcher (PCL) - Aris修改版.exe"
